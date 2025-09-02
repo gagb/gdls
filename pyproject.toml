@@ -1,0 +1,14 @@
+[project]
+name = "google-drive-api"
+version = "0.1.0"
+description = "Google Drive API File Lister"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "google-api-python-client==2.95.0",
+    "google-auth-httplib2==0.1.0",
+    "google-auth-oauthlib==1.0.0",
+]
+
+[tool.uv]
+dev-dependencies = []
