@@ -216,7 +216,8 @@ class GDriveLs:
                    recursive: bool = False,
                    sort_by: str = 'name',
                    reverse_sort: bool = False,
-                   show_size: bool = False) -> List[Dict]:
+                   show_size: bool = False,
+                   owned_only: bool = False) -> List[Dict]:
         """
         List files in a Google Drive folder
         
@@ -253,7 +254,7 @@ class GDriveLs:
                 results = self.service.files().list(
                     q=query,
                     pageSize=1000,
-                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime, owners, webViewLink)",
+                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime, owners, webViewLink, ownedByMe, shared)",
                     pageToken=page_token
                 ).execute()
                 
@@ -267,14 +268,24 @@ class GDriveLs:
                 print(f"Error listing files: {e}", file=sys.stderr)
                 return []
         
+        # Filter by ownership if requested
+        if owned_only:
+            all_items = [item for item in all_items if item.get('ownedByMe', False)]
+        
         # Calculate folder sizes if requested
         if show_size:
             print("Calculating folder sizes...", file=sys.stderr)
             for item in all_items:
                 if item.get('mimeType') == 'application/vnd.google-apps.folder':
-                    folder_size = self._calculate_folder_size(item['id'])
-                    item['calculated_size'] = str(folder_size)
-                    item['size'] = item.get('size', str(folder_size))
+                    # Only calculate size for owned folders to get accurate storage usage
+                    if item.get('ownedByMe', True):
+                        folder_size = self._calculate_folder_size(item['id'])
+                        item['calculated_size'] = str(folder_size)
+                        item['size'] = item.get('size', str(folder_size))
+                    else:
+                        # Shared folders don't count against your quota
+                        item['calculated_size'] = '0'
+                        item['size'] = '0'
         
         # Sort items
         if sort_by == 'size':
@@ -299,7 +310,8 @@ class GDriveLs:
                      long_format: bool = False,
                      human_readable: bool = False,
                      path: str = '/',
-                     show_size: bool = False):
+                     show_size: bool = False,
+                     show_ownership: bool = False):
         """Display items in requested format"""
         
         if not items:
@@ -326,8 +338,23 @@ class GDriveLs:
                 elif file_type == 'g':
                     name = f"\033[32m{name}\033[0m"  # Green for Google Docs
                 
+                # Show ownership info
+                is_owned = item.get('ownedByMe', True)
+                is_shared = item.get('shared', False)
+                
+                # Add ownership indicator to name
+                if not is_owned and is_shared:
+                    name = f"\033[93m{name} [shared]\033[0m"  # Yellow for shared files
+                
+                # Get owner info
+                if show_ownership or not is_owned:
+                    owners = item.get('owners', [{}])
+                    owner_name = owners[0].get('displayName', 'unknown')[:8] if owners else 'unknown'
+                else:
+                    owner_name = item.get('owners', [{}])[0].get('displayName', 'unknown')[:8]
+                
                 # Format: type permissions links owner size date name
-                print(f"{file_type}rw-r--r-- 1 {item.get('owners', [{}])[0].get('displayName', 'unknown')[:8]:8} {size:>8} {date} {name}")
+                print(f"{file_type}rw-r--r-- 1 {owner_name:8} {size:>8} {date} {name}")
         else:
             # Simple format - just names
             for item in items:
@@ -336,6 +363,13 @@ class GDriveLs:
                     name = f"\033[34m{name}/\033[0m"
                 elif 'google-apps' in item.get('mimeType', ''):
                     name = f"\033[32m{name}\033[0m"
+                
+                # Add ownership indicator
+                is_owned = item.get('ownedByMe', True)
+                is_shared = item.get('shared', False)
+                if not is_owned and is_shared:
+                    name = f"\033[93m{name} [shared]\033[0m"  # Yellow for shared files
+                
                 print(name)
     
     def recursive_list(self, path: str = '/', prefix: str = '', **kwargs):
@@ -390,6 +424,10 @@ Examples:
                        help='Sort by attribute (default: name)')
     parser.add_argument('-s', '--size', action='store_true',
                        help='Calculate and show actual folder sizes (slower but accurate)')
+    parser.add_argument('-o', '--owned', action='store_true',
+                       help='Show only files/folders owned by you')
+    parser.add_argument('-O', '--ownership', action='store_true',
+                       help='Show detailed ownership information')
     parser.add_argument('--no-cache', action='store_true',
                        help='Clear cache before running')
     
@@ -415,7 +453,8 @@ Examples:
             show_hidden=args.all,
             sort_by=args.sort,
             reverse_sort=args.reverse,
-            show_size=args.size
+            show_size=args.size,
+            owned_only=args.owned
         )
     else:
         items = gdrive.list_files(
@@ -425,7 +464,8 @@ Examples:
             show_hidden=args.all,
             sort_by=args.sort,
             reverse_sort=args.reverse,
-            show_size=args.size
+            show_size=args.size,
+            owned_only=args.owned
         )
         
         if items:
@@ -434,7 +474,8 @@ Examples:
                 long_format=args.long,
                 human_readable=args.human_readable,
                 path=args.path,
-                show_size=args.size
+                show_size=args.size,
+                show_ownership=args.ownership
             )
         else:
             print(f"No files found in {args.path}")

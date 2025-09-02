@@ -86,6 +86,8 @@ gdls -a /
 | `-R, --recursive` | List subdirectories recursively |
 | `-r, --reverse` | Reverse order while sorting |
 | `-s, --size` | Calculate actual folder sizes (accurate but slower) |
+| `-o, --owned` | Show only files/folders owned by you |
+| `-O, --ownership` | Show detailed ownership information |
 | `--sort TYPE` | Sort by: name, size, date, or type |
 | `--no-cache` | Clear cache before running |
 
@@ -97,6 +99,15 @@ gdls -lH --sort=size /
 
 # Find folders taking up the most space (accurate but slower)
 gdls -lHs --sort=size /
+
+# Show only YOUR files (exclude shared folders)
+gdls -o /
+
+# Find your largest files/folders (what counts against storage quota)
+gdls -lHso --sort=size /
+
+# Show detailed ownership info
+gdls -lO /
 
 # Explore a project folder
 gdls -lH /Projects/2024
@@ -124,8 +135,9 @@ uv run python list_drive_files.py
 ## File Type Indicators
 
 - 📁 **Blue text with /** - Folders
-- 📄 **Green text** - Google Docs/Sheets/Slides
+- 📄 **Green text** - Google Docs/Sheets/Slides  
 - 📎 **White text** - Regular files
+- 🤝 **Yellow text with [shared]** - Files shared with you (don't count against your quota)
 
 ## Troubleshooting
 
