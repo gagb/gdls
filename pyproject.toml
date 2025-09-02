@@ -1,7 +1,7 @@
 [project]
-name = "google-drive-api"
+name = "gdls"
 version = "0.1.0"
-description = "Google Drive API File Lister"
+description = "Unix-like ls command for Google Drive"
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
@@ -9,6 +9,9 @@ dependencies = [
     "google-auth-httplib2==0.1.0",
     "google-auth-oauthlib==1.0.0",
 ]
+
+[project.scripts]
+gdls = "gdls.cli:main"
 
 [tool.uv]
 dev-dependencies = []

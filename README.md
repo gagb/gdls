@@ -1,40 +1,149 @@
-# Google Drive API File Lister
+# gdls - Google Drive ls Command
 
-This project lists files from your Google Drive using the Google Drive API v3.
+A Unix-like `ls` command for Google Drive. Browse your Google Drive from the terminal just like your local filesystem!
 
-## Setup
+## Features
+
+- 🗂️ **Unix-like interface** - Works just like the `ls` command you know and love
+- 📁 **Navigate directories** - Use paths like `/` or `/Documents/Projects`
+- 🎨 **Color-coded output** - Folders in blue, Google Docs in green
+- 📊 **Multiple display modes** - Long format (`-l`), human-readable sizes (`-H`)
+- 🔄 **Sorting options** - Sort by name, size, date, or type
+- 🔍 **Recursive listing** - Explore entire directory trees with `-R`
+- ⚡ **Path caching** - Fast repeated operations
+
+## Installation
+
+### Quick Install with uv
+
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone and install gdls
+git clone https://github.com/gagb/google-drive-api-tools.git
+cd google-drive-api-tools
+uv pip install -e .
+```
+
+### Setup Google Drive API
 
 1. **Enable Google Drive API:**
    - Go to [Google Cloud Console](https://console.cloud.google.com/)
    - Create a new project or select an existing one
    - Enable the Google Drive API
-   - Create credentials (OAuth 2.0 Client ID)
+   - Create credentials (OAuth 2.0 Client ID - Web application type)
+   - Add `http://localhost:8080/` to Authorized redirect URIs
    - Download the credentials as `credentials.json`
 
-2. **Install uv (if not already installed):**
+2. **Place credentials:**
    ```bash
-   curl -LsSf https://astral.sh/uv/install.sh | sh
+   # Put credentials.json in the project directory
+   cp ~/Downloads/credentials.json .
    ```
 
-3. **Install dependencies:**
+3. **First run (authentication):**
    ```bash
-   uv sync
+   gdls /
+   # This will open a browser for authentication
+   # After authorization, a token will be saved for future use
    ```
 
-4. **Place credentials:**
-   - Put the downloaded `credentials.json` file in this directory
+## Usage
 
-5. **Run the script:**
-   ```bash
-   uv run python list_drive_files.py
-   ```
+### Basic Commands
 
-   On first run, it will open a browser for authentication. After authorization, a `token.pickle` file will be created for future use.
+```bash
+# List root directory
+gdls /
 
-## Files
+# List specific folder
+gdls /Documents
 
-- `list_drive_files.py` - Main script to list Google Drive files
-- `pyproject.toml` - Project configuration and dependencies for uv
-- `requirements.txt` - Legacy Python dependencies (kept for compatibility)
-- `credentials.json` - OAuth2 credentials (you need to add this)
-- `token.pickle` - Saved authentication token (created after first run)
+# List with details (long format)
+gdls -l /
+
+# Human-readable sizes with long format
+gdls -lH /
+
+# Sort by size (largest first)
+gdls --sort=size /
+
+# Recursive listing
+gdls -R /Photos
+
+# Show hidden (trashed) files
+gdls -a /
+```
+
+### Command Options
+
+| Option | Description |
+|--------|-------------|
+| `-l, --long` | Use long listing format (shows size, date, owner) |
+| `-H, --human-readable` | Print sizes in human readable format (1K, 234M, 2G) |
+| `-a, --all` | Show all files including trashed |
+| `-R, --recursive` | List subdirectories recursively |
+| `-r, --reverse` | Reverse order while sorting |
+| `--sort TYPE` | Sort by: name, size, date, or type |
+| `--no-cache` | Clear cache before running |
+
+### Examples
+
+```bash
+# Find large files in your Drive
+gdls -lH --sort=size /
+
+# Explore a project folder
+gdls -lH /Projects/2024
+
+# See everything in Documents recursively
+gdls -R /Documents
+
+# Check recently modified files
+gdls -l --sort=date /
+```
+
+## Additional Tools
+
+This package also includes:
+
+- **`find_large_files.py`** - Find and analyze large files taking up space
+- **`list_drive_files.py`** - Simple file lister
+
+Run them with:
+```bash
+uv run python find_large_files.py
+uv run python list_drive_files.py
+```
+
+## File Type Indicators
+
+- 📁 **Blue text with /** - Folders
+- 📄 **Green text** - Google Docs/Sheets/Slides
+- 📎 **White text** - Regular files
+
+## Troubleshooting
+
+### Authentication Issues
+
+If you see "Access blocked" error:
+1. Make sure you've added yourself as a test user in Google Cloud Console
+2. Go to APIs & Services → OAuth consent screen → Test users
+3. Add your email address
+
+### Performance
+
+- First run in each directory may be slower as it builds the cache
+- Subsequent runs use cached folder IDs for faster navigation
+- Use `--no-cache` if you see stale data
+
+## Requirements
+
+- Python 3.8+
+- Google Drive API enabled
+- OAuth 2.0 credentials
+
+## License
+
+MIT
