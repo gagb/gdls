@@ -57,7 +57,7 @@ class GDriveLs:
                     return json.load(f)
             except:
                 pass
-        return {'paths': {}}
+        return {'paths': {}, 'folder_sizes': {}}
     
     def _save_cache(self):
         """Save path cache to file"""
@@ -150,13 +150,73 @@ class GDriveLs:
         else:
             return '-'  # Regular file
     
+    def _calculate_folder_size(self, folder_id: str, visited=None) -> int:
+        """Calculate total size of all files in a folder recursively"""
+        if visited is None:
+            visited = set()
+        
+        # Check cache first
+        cache_key = f"size_{folder_id}"
+        if cache_key in self.cache.get('folder_sizes', {}):
+            # Cache expires after 1 hour
+            cached_data = self.cache['folder_sizes'][cache_key]
+            if cached_data.get('timestamp', 0) > datetime.now().timestamp() - 3600:
+                return cached_data.get('size', 0)
+        
+        # Avoid infinite loops
+        if folder_id in visited:
+            return 0
+        visited.add(folder_id)
+        
+        total_size = 0
+        page_token = None
+        
+        while True:
+            try:
+                # Get all items in this folder
+                results = self.service.files().list(
+                    q=f"'{folder_id}' in parents and trashed=false",
+                    pageSize=1000,
+                    fields="nextPageToken, files(id, mimeType, size)",
+                    pageToken=page_token
+                ).execute()
+                
+                items = results.get('files', [])
+                
+                for item in items:
+                    # If it's a file, add its size
+                    if 'size' in item:
+                        total_size += int(item['size'])
+                    # If it's a folder, recursively calculate its size
+                    elif item.get('mimeType') == 'application/vnd.google-apps.folder':
+                        total_size += self._calculate_folder_size(item['id'], visited.copy())
+                
+                page_token = results.get('nextPageToken')
+                if not page_token:
+                    break
+                    
+            except HttpError:
+                break
+        
+        # Cache the result
+        if 'folder_sizes' not in self.cache:
+            self.cache['folder_sizes'] = {}
+        self.cache['folder_sizes'][cache_key] = {
+            'size': total_size,
+            'timestamp': datetime.now().timestamp()
+        }
+        self._save_cache()
+        
+        return total_size
+    
     def list_files(self, path: str = '/', 
                    long_format: bool = False,
                    human_readable: bool = False,
                    show_hidden: bool = False,
                    recursive: bool = False,
                    sort_by: str = 'name',
-                   reverse_sort: bool = False) -> List[Dict]:
+                   reverse_sort: bool = False,
+                   show_size: bool = False) -> List[Dict]:
         """
         List files in a Google Drive folder
         
@@ -207,9 +267,22 @@ class GDriveLs:
                 print(f"Error listing files: {e}", file=sys.stderr)
                 return []
         
+        # Calculate folder sizes if requested
+        if show_size:
+            print("Calculating folder sizes...", file=sys.stderr)
+            for item in all_items:
+                if item.get('mimeType') == 'application/vnd.google-apps.folder':
+                    folder_size = self._calculate_folder_size(item['id'])
+                    item['calculated_size'] = str(folder_size)
+                    item['size'] = item.get('size', str(folder_size))
+        
         # Sort items
         if sort_by == 'size':
-            all_items.sort(key=lambda x: int(x.get('size', '0')), reverse=True)
+            if show_size:
+                # When showing sizes, sort folders by calculated size
+                all_items.sort(key=lambda x: int(x.get('calculated_size', x.get('size', '0'))), reverse=True)
+            else:
+                all_items.sort(key=lambda x: int(x.get('size', '0')), reverse=True)
         elif sort_by == 'date':
             all_items.sort(key=lambda x: x.get('modifiedTime', ''), reverse=True)
         elif sort_by == 'type':
@@ -225,7 +298,8 @@ class GDriveLs:
     def display_items(self, items: List[Dict], 
                      long_format: bool = False,
                      human_readable: bool = False,
-                     path: str = '/'):
+                     path: str = '/',
+                     show_size: bool = False):
         """Display items in requested format"""
         
         if not items:
@@ -233,7 +307,10 @@ class GDriveLs:
         
         if long_format:
             # Calculate total size
-            total_size = sum(int(item.get('size', '0')) for item in items)
+            if show_size:
+                total_size = sum(int(item.get('calculated_size', item.get('size', '0'))) for item in items)
+            else:
+                total_size = sum(int(item.get('size', '0')) for item in items)
             print(f"total {self._format_size(str(total_size)) if human_readable else total_size}")
             
             # Display each item
@@ -311,6 +388,8 @@ Examples:
     parser.add_argument('--sort', choices=['name', 'size', 'date', 'type'],
                        default='name',
                        help='Sort by attribute (default: name)')
+    parser.add_argument('-s', '--size', action='store_true',
+                       help='Calculate and show actual folder sizes (slower but accurate)')
     parser.add_argument('--no-cache', action='store_true',
                        help='Clear cache before running')
     
@@ -335,7 +414,8 @@ Examples:
             human_readable=args.human_readable,
             show_hidden=args.all,
             sort_by=args.sort,
-            reverse_sort=args.reverse
+            reverse_sort=args.reverse,
+            show_size=args.size
         )
     else:
         items = gdrive.list_files(
@@ -344,7 +424,8 @@ Examples:
             human_readable=args.human_readable,
             show_hidden=args.all,
             sort_by=args.sort,
-            reverse_sort=args.reverse
+            reverse_sort=args.reverse,
+            show_size=args.size
         )
         
         if items:
@@ -352,7 +433,8 @@ Examples:
                 items,
                 long_format=args.long,
                 human_readable=args.human_readable,
-                path=args.path
+                path=args.path,
+                show_size=args.size
             )
         else:
             print(f"No files found in {args.path}")

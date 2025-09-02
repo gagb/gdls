@@ -85,6 +85,7 @@ gdls -a /
 | `-a, --all` | Show all files including trashed |
 | `-R, --recursive` | List subdirectories recursively |
 | `-r, --reverse` | Reverse order while sorting |
+| `-s, --size` | Calculate actual folder sizes (accurate but slower) |
 | `--sort TYPE` | Sort by: name, size, date, or type |
 | `--no-cache` | Clear cache before running |
 
@@ -93,6 +94,9 @@ gdls -a /
 ```bash
 # Find large files in your Drive
 gdls -lH --sort=size /
+
+# Find folders taking up the most space (accurate but slower)
+gdls -lHs --sort=size /
 
 # Explore a project folder
 gdls -lH /Projects/2024
