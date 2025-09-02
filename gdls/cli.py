@@ -3,406 +3,59 @@
 Google Drive ls command - Unix-like ls for Google Drive
 """
 
-import os
-import sys
-import pickle
 import argparse
-import json
-from datetime import datetime
-from typing import List, Dict, Optional, Tuple
-from pathlib import Path
+import sys
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+from .auth import DriveAuth
+from .cache import DriveCache
+from .core import DriveError, ListOptions
+from .display import DisplayFormatter
+from .explorer import DriveExplorer
+from .paths import PathResolver
 
-SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
-CACHE_FILE = '.gdrive_cache.json'
 
-class GDriveLs:
+class GDriveCLI:
+    """Clean CLI interface for Google Drive listing"""
+    
     def __init__(self):
+        self.auth = DriveAuth()
+        self.cache = DriveCache()
         self.service = None
-        self.cache = self._load_cache()
-        self._authenticate()
+        self.path_resolver = None
+        self.explorer = None
+        self.formatter = None
     
-    def _authenticate(self):
-        """Authenticate with Google Drive API"""
-        creds = None
-        
-        if os.path.exists('token.pickle'):
-            with open('token.pickle', 'rb') as token:
-                creds = pickle.load(token)
-        
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    'credentials.json', SCOPES,
-                    redirect_uri='http://localhost:8080/')
-                creds = flow.run_local_server(port=8080, host='localhost')
-            
-            with open('token.pickle', 'wb') as token:
-                pickle.dump(creds, token)
-        
-        self.service = build('drive', 'v3', credentials=creds)
-    
-    def _load_cache(self) -> Dict:
-        """Load path cache from file"""
-        if os.path.exists(CACHE_FILE):
-            try:
-                with open(CACHE_FILE, 'r') as f:
-                    return json.load(f)
-            except:
-                pass
-        return {'paths': {}, 'folder_sizes': {}}
-    
-    def _save_cache(self):
-        """Save path cache to file"""
-        with open(CACHE_FILE, 'w') as f:
-            json.dump(self.cache, f)
-    
-    def _resolve_path(self, path: str) -> Tuple[str, str]:
-        """
-        Resolve a path like /folder1/folder2 to a folder ID
-        Returns (folder_id, folder_name)
-        """
-        if path == '/' or path == '':
-            return ('root', 'My Drive')
-        
-        # Check cache first
-        if path in self.cache['paths']:
-            return self.cache['paths'][path]
-        
-        # Parse path components
-        parts = [p for p in path.strip('/').split('/') if p]
-        current_id = 'root'
-        current_name = 'My Drive'
-        
-        for part in parts:
-            # Search for folder with this name in current folder
-            query = f"'{current_id}' in parents and name='{part}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-            
-            try:
-                results = self.service.files().list(
-                    q=query,
-                    fields="files(id, name)",
-                    pageSize=1
-                ).execute()
-                
-                items = results.get('files', [])
-                if not items:
-                    raise ValueError(f"Folder '{part}' not found in path '{path}'")
-                
-                current_id = items[0]['id']
-                current_name = items[0]['name']
-            except HttpError as e:
-                raise ValueError(f"Error resolving path '{path}': {e}")
-        
-        # Cache the result
-        self.cache['paths'][path] = (current_id, current_name)
-        self._save_cache()
-        
-        return (current_id, current_name)
-    
-    def _format_size(self, size_bytes: Optional[str]) -> str:
-        """Format file size in human-readable format"""
-        if size_bytes is None:
-            return '-'
-        
-        size = int(size_bytes)
-        for unit in ['B', 'K', 'M', 'G', 'T']:
-            if size < 1024.0:
-                if unit == 'B':
-                    return f"{size:4d}{unit}"
-                return f"{size:4.0f}{unit}"
-            size /= 1024.0
-        return f"{size:.0f}P"
-    
-    def _format_date(self, date_str: Optional[str]) -> str:
-        """Format date for display"""
-        if not date_str:
-            return '-'
-        
+    def initialize(self):
+        """Initialize all components"""
         try:
-            date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-            now = datetime.now(date.tzinfo)
-            
-            # If within last 6 months, show month day time
-            # Otherwise show month day year
-            diff_days = (now - date).days
-            
-            if diff_days < 180:
-                return date.strftime('%b %d %H:%M')
-            else:
-                return date.strftime('%b %d  %Y')
-        except:
-            return date_str[:10] if date_str else '-'
+            self.service = self.auth.get_service()
+            self.path_resolver = PathResolver(self.service, self.cache)
+            self.explorer = DriveExplorer(self.service, self.cache)
+            self.formatter = DisplayFormatter()
+        except Exception as e:
+            raise DriveError(f"Failed to initialize: {e}")
     
-    def _get_file_type_char(self, mime_type: str) -> str:
-        """Get single character representing file type"""
-        if mime_type == 'application/vnd.google-apps.folder':
-            return 'd'
-        elif 'google-apps' in mime_type:
-            return 'g'  # Google Docs/Sheets/etc
-        else:
-            return '-'  # Regular file
-    
-    def _calculate_folder_size(self, folder_id: str, visited=None) -> int:
-        """Calculate total size of all files in a folder recursively"""
-        if visited is None:
-            visited = set()
-        
-        # Check cache first
-        cache_key = f"size_{folder_id}"
-        if cache_key in self.cache.get('folder_sizes', {}):
-            # Cache expires after 1 hour
-            cached_data = self.cache['folder_sizes'][cache_key]
-            if cached_data.get('timestamp', 0) > datetime.now().timestamp() - 3600:
-                return cached_data.get('size', 0)
-        
-        # Avoid infinite loops
-        if folder_id in visited:
-            return 0
-        visited.add(folder_id)
-        
-        total_size = 0
-        page_token = None
-        
-        while True:
-            try:
-                # Get all items in this folder
-                results = self.service.files().list(
-                    q=f"'{folder_id}' in parents and trashed=false",
-                    pageSize=1000,
-                    fields="nextPageToken, files(id, mimeType, size)",
-                    pageToken=page_token
-                ).execute()
-                
-                items = results.get('files', [])
-                
-                for item in items:
-                    # If it's a file, add its size
-                    if 'size' in item:
-                        total_size += int(item['size'])
-                    # If it's a folder, recursively calculate its size
-                    elif item.get('mimeType') == 'application/vnd.google-apps.folder':
-                        total_size += self._calculate_folder_size(item['id'], visited.copy())
-                
-                page_token = results.get('nextPageToken')
-                if not page_token:
-                    break
-                    
-            except HttpError:
-                break
-        
-        # Cache the result
-        if 'folder_sizes' not in self.cache:
-            self.cache['folder_sizes'] = {}
-        self.cache['folder_sizes'][cache_key] = {
-            'size': total_size,
-            'timestamp': datetime.now().timestamp()
-        }
-        self._save_cache()
-        
-        return total_size
-    
-    def list_files(self, path: str = '/', 
-                   long_format: bool = False,
-                   human_readable: bool = False,
-                   show_hidden: bool = False,
-                   recursive: bool = False,
-                   sort_by: str = 'name',
-                   reverse_sort: bool = False,
-                   show_size: bool = False,
-                   owned_only: bool = False) -> List[Dict]:
-        """
-        List files in a Google Drive folder
-        
-        Args:
-            path: Path to list (e.g., '/' or '/Documents')
-            long_format: Show detailed information
-            human_readable: Show sizes in human-readable format
-            show_hidden: Show trashed files
-            recursive: List subdirectories recursively
-            sort_by: Sort by 'name', 'size', 'date', or 'type'
-            reverse_sort: Reverse sort order
-        
-        Returns:
-            List of file/folder information dictionaries
-        """
+    def list_directory(self, path: str, options: ListOptions):
+        """List directory with given options"""
         try:
-            folder_id, folder_name = self._resolve_path(path)
-        except ValueError as e:
+            path_info = self.path_resolver.resolve(path)
+            items = self.explorer.list_files(path_info.id, options)
+            self.formatter.format_items(items, options)
+        except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
-            return []
-        
-        # Build query
-        query_parts = [f"'{folder_id}' in parents"]
-        if not show_hidden:
-            query_parts.append("trashed=false")
-        query = " and ".join(query_parts)
-        
-        # Fetch files
-        all_items = []
-        page_token = None
-        
-        while True:
-            try:
-                results = self.service.files().list(
-                    q=query,
-                    pageSize=1000,
-                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime, owners, webViewLink, ownedByMe, shared)",
-                    pageToken=page_token
-                ).execute()
-                
-                items = results.get('files', [])
-                all_items.extend(items)
-                
-                page_token = results.get('nextPageToken')
-                if not page_token:
-                    break
-            except HttpError as e:
-                print(f"Error listing files: {e}", file=sys.stderr)
-                return []
-        
-        # Filter by ownership if requested
-        if owned_only:
-            all_items = [item for item in all_items if item.get('ownedByMe', False)]
-        
-        # Calculate folder sizes if requested
-        if show_size:
-            print("Calculating folder sizes...", file=sys.stderr)
-            for item in all_items:
-                if item.get('mimeType') == 'application/vnd.google-apps.folder':
-                    # Only calculate size for owned folders to get accurate storage usage
-                    if item.get('ownedByMe', True):
-                        folder_size = self._calculate_folder_size(item['id'])
-                        item['calculated_size'] = str(folder_size)
-                        item['size'] = item.get('size', str(folder_size))
-                    else:
-                        # Shared folders don't count against your quota
-                        item['calculated_size'] = '0'
-                        item['size'] = '0'
-        
-        # Sort items
-        if sort_by == 'size':
-            if show_size:
-                # When showing sizes, sort folders by calculated size
-                all_items.sort(key=lambda x: int(x.get('calculated_size', x.get('size', '0'))), reverse=True)
-            else:
-                all_items.sort(key=lambda x: int(x.get('size', '0')), reverse=True)
-        elif sort_by == 'date':
-            all_items.sort(key=lambda x: x.get('modifiedTime', ''), reverse=True)
-        elif sort_by == 'type':
-            all_items.sort(key=lambda x: (x.get('mimeType', ''), x.get('name', '')))
-        else:  # name
-            all_items.sort(key=lambda x: x.get('name', '').lower())
-        
-        if reverse_sort:
-            all_items.reverse()
-        
-        return all_items
-    
-    def display_items(self, items: List[Dict], 
-                     long_format: bool = False,
-                     human_readable: bool = False,
-                     path: str = '/',
-                     show_size: bool = False,
-                     show_ownership: bool = False):
-        """Display items in requested format"""
-        
-        if not items:
-            return
-        
-        if long_format:
-            # Calculate total size
-            if show_size:
-                total_size = sum(int(item.get('calculated_size', item.get('size', '0'))) for item in items)
-            else:
-                total_size = sum(int(item.get('size', '0')) for item in items)
-            print(f"total {self._format_size(str(total_size)) if human_readable else total_size}")
-            
-            # Display each item
-            for item in items:
-                file_type = self._get_file_type_char(item.get('mimeType', ''))
-                size = self._format_size(item.get('size')) if human_readable else item.get('size', '-')
-                date = self._format_date(item.get('modifiedTime'))
-                name = item['name']
-                
-                # Add folder indicator
-                if file_type == 'd':
-                    name = f"\033[34m{name}/\033[0m"  # Blue color for folders
-                elif file_type == 'g':
-                    name = f"\033[32m{name}\033[0m"  # Green for Google Docs
-                
-                # Show ownership info
-                is_owned = item.get('ownedByMe', True)
-                is_shared = item.get('shared', False)
-                
-                # Add ownership indicator to name
-                if not is_owned and is_shared:
-                    name = f"\033[93m{name} [shared]\033[0m"  # Yellow for shared files
-                
-                # Get owner info
-                if show_ownership or not is_owned:
-                    owners = item.get('owners', [{}])
-                    owner_name = owners[0].get('displayName', 'unknown')[:8] if owners else 'unknown'
-                else:
-                    owner_name = item.get('owners', [{}])[0].get('displayName', 'unknown')[:8]
-                
-                # Format: type permissions links owner size date name
-                print(f"{file_type}rw-r--r-- 1 {owner_name:8} {size:>8} {date} {name}")
-        else:
-            # Simple format - just names
-            for item in items:
-                name = item['name']
-                if item.get('mimeType') == 'application/vnd.google-apps.folder':
-                    name = f"\033[34m{name}/\033[0m"
-                elif 'google-apps' in item.get('mimeType', ''):
-                    name = f"\033[32m{name}\033[0m"
-                
-                # Add ownership indicator
-                is_owned = item.get('ownedByMe', True)
-                is_shared = item.get('shared', False)
-                if not is_owned and is_shared:
-                    name = f"\033[93m{name} [shared]\033[0m"  # Yellow for shared files
-                
-                print(name)
-    
-    def recursive_list(self, path: str = '/', prefix: str = '', **kwargs):
-        """Recursively list directories"""
-        items = self.list_files(path, **kwargs)
-        
-        # Display current directory
-        if prefix:
-            print(f"\n{prefix}:")
-        else:
-            print(f"{path}:")
-        
-        self.display_items(items, **kwargs)
-        
-        # Find subdirectories and recurse
-        folders = [item for item in items 
-                  if item.get('mimeType') == 'application/vnd.google-apps.folder']
-        
-        for folder in folders:
-            folder_path = path.rstrip('/') + '/' + folder['name']
-            self.recursive_list(folder_path, folder_path, **kwargs)
+            sys.exit(1)
 
 
-def main():
+def create_parser():
+    """Create argument parser"""
     parser = argparse.ArgumentParser(
         description='List Google Drive files and folders (Unix ls-like interface)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
   %(prog)s                      # List root directory
-  %(prog)s /Documents           # List Documents folder
+  %(prog)s /Documents           # List Documents folder  
   %(prog)s -lH /                # Long format with human-readable sizes
-  %(prog)s -R /Photos           # Recursive listing
   %(prog)s --sort=size /        # Sort by file size
         """
     )
@@ -412,73 +65,60 @@ Examples:
     parser.add_argument('-l', '--long', action='store_true',
                        help='Use long listing format')
     parser.add_argument('-H', '--human-readable', action='store_true',
-                       help='Print sizes in human readable format (e.g., 1K, 234M, 2G)')
+                       help='Print sizes in human readable format')
     parser.add_argument('-a', '--all', action='store_true',
                        help='Show all files including trashed')
-    parser.add_argument('-R', '--recursive', action='store_true',
-                       help='List subdirectories recursively')
     parser.add_argument('-r', '--reverse', action='store_true',
                        help='Reverse order while sorting')
     parser.add_argument('--sort', choices=['name', 'size', 'date', 'type'],
                        default='name',
                        help='Sort by attribute (default: name)')
     parser.add_argument('-s', '--size', action='store_true',
-                       help='Calculate and show actual folder sizes (slower but accurate)')
+                       help='Calculate and show actual folder sizes')
     parser.add_argument('-o', '--owned', action='store_true',
                        help='Show only files/folders owned by you')
     parser.add_argument('-O', '--ownership', action='store_true',
                        help='Show detailed ownership information')
-    parser.add_argument('--no-cache', action='store_true',
+    parser.add_argument('--clear-cache', action='store_true',
                        help='Clear cache before running')
     
+    return parser
+
+
+def main():
+    """Main entry point"""
+    parser = create_parser()
     args = parser.parse_args()
     
-    # Clear cache if requested
-    if args.no_cache and os.path.exists(CACHE_FILE):
-        os.remove(CACHE_FILE)
+    # Initialize CLI
+    cli = GDriveCLI()
     
-    # Create GDrive ls instance
     try:
-        gdrive = GDriveLs()
-    except Exception as e:
-        print(f"Error initializing Google Drive connection: {e}", file=sys.stderr)
-        sys.exit(1)
-    
-    # Perform listing
-    if args.recursive:
-        gdrive.recursive_list(
-            args.path,
+        if args.clear_cache:
+            cli.cache.clear()
+        
+        cli.initialize()
+        
+        # Create options from arguments
+        options = ListOptions(
             long_format=args.long,
             human_readable=args.human_readable,
             show_hidden=args.all,
             sort_by=args.sort,
             reverse_sort=args.reverse,
             show_size=args.size,
-            owned_only=args.owned
-        )
-    else:
-        items = gdrive.list_files(
-            args.path,
-            long_format=args.long,
-            human_readable=args.human_readable,
-            show_hidden=args.all,
-            sort_by=args.sort,
-            reverse_sort=args.reverse,
-            show_size=args.size,
-            owned_only=args.owned
+            owned_only=args.owned,
+            show_ownership=args.ownership
         )
         
-        if items:
-            gdrive.display_items(
-                items,
-                long_format=args.long,
-                human_readable=args.human_readable,
-                path=args.path,
-                show_size=args.size,
-                show_ownership=args.ownership
-            )
-        else:
-            print(f"No files found in {args.path}")
+        cli.list_directory(args.path, options)
+        
+    except KeyboardInterrupt:
+        print("\nCancelled", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"Fatal error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':

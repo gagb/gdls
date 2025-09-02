@@ -1,165 +1,77 @@
-# gdls - Google Drive ls Command
+# gdls
 
-A Unix-like `ls` command for Google Drive. Browse your Google Drive from the terminal just like your local filesystem!
+**Unix `ls` for Google Drive.**
 
-## Features
+Browse your Google Drive from the terminal just like your local filesystem.
 
-- 🗂️ **Unix-like interface** - Works just like the `ls` command you know and love
-- 📁 **Navigate directories** - Use paths like `/` or `/Documents/Projects`
-- 🎨 **Color-coded output** - Folders in blue, Google Docs in green
-- 📊 **Multiple display modes** - Long format (`-l`), human-readable sizes (`-H`)
-- 🔄 **Sorting options** - Sort by name, size, date, or type
-- 🔍 **Recursive listing** - Explore entire directory trees with `-R`
-- ⚡ **Path caching** - Fast repeated operations
-
-## Installation
-
-### Quick Install with uv
+## Install
 
 ```bash
-# Install uv if you haven't already
+# Get it
 curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone and install gdls
 git clone https://github.com/gagb/google-drive-api-tools.git
 cd google-drive-api-tools
 uv pip install -e .
+
+# Set up Google Drive API
+# 1. Go to console.cloud.google.com
+# 2. Enable Drive API + create OAuth credentials  
+# 3. Download as credentials.json
+# 4. Run: gdls /
 ```
 
-### Setup Google Drive API
-
-1. **Enable Google Drive API:**
-   - Go to [Google Cloud Console](https://console.cloud.google.com/)
-   - Create a new project or select an existing one
-   - Enable the Google Drive API
-   - Create credentials (OAuth 2.0 Client ID - Web application type)
-   - Add `http://localhost:8080/` to Authorized redirect URIs
-   - Download the credentials as `credentials.json`
-
-2. **Place credentials:**
-   ```bash
-   # Put credentials.json in the project directory
-   cp ~/Downloads/credentials.json .
-   ```
-
-3. **First run (authentication):**
-   ```bash
-   gdls /
-   # This will open a browser for authentication
-   # After authorization, a token will be saved for future use
-   ```
-
-## Usage
-
-### Basic Commands
+## Use
 
 ```bash
-# List root directory
-gdls /
-
-# List specific folder
-gdls /Documents
-
-# List with details (long format)
-gdls -l /
-
-# Human-readable sizes with long format
-gdls -lH /
-
-# Sort by size (largest first)
-gdls --sort=size /
-
-# Recursive listing
-gdls -R /Photos
-
-# Show hidden (trashed) files
-gdls -a /
+gdls /                    # List root
+gdls /Documents           # List folder  
+gdls -l /                 # Details
+gdls -lH /                # Human sizes
+gdls --sort=size /        # By size
+gdls -s /                 # Calculate folder sizes
+gdls -o /                 # Your files only
 ```
 
-### Command Options
+## Options
 
-| Option | Description |
-|--------|-------------|
-| `-l, --long` | Use long listing format (shows size, date, owner) |
-| `-H, --human-readable` | Print sizes in human readable format (1K, 234M, 2G) |
-| `-a, --all` | Show all files including trashed |
-| `-R, --recursive` | List subdirectories recursively |
-| `-r, --reverse` | Reverse order while sorting |
-| `-s, --size` | Calculate actual folder sizes (accurate but slower) |
-| `-o, --owned` | Show only files/folders owned by you |
-| `-O, --ownership` | Show detailed ownership information |
-| `--sort TYPE` | Sort by: name, size, date, or type |
-| `--no-cache` | Clear cache before running |
+```
+-l, --long               Details (size, date, owner)
+-H, --human-readable     1K, 234M, 2G instead of bytes  
+-s, --size               Calculate actual folder sizes
+-o, --owned              Your files only (excludes shared)
+--sort TYPE              name, size, date, type
+--clear-cache            Fresh start
+```
 
-### Examples
+## Why
 
+Managing Google Drive storage is painful. You pay for 100GB but use 1TB because you can't see what's taking space.
+
+`gdls` shows you exactly what counts against your quota. Shared folders don't count. Your duplicates do.
+
+Find your largest files:
 ```bash
-# Find large files in your Drive
-gdls -lH --sort=size /
-
-# Find folders taking up the most space (accurate but slower)
-gdls -lHs --sort=size /
-
-# Show only YOUR files (exclude shared folders)
-gdls -o /
-
-# Find your largest files/folders (what counts against storage quota)
 gdls -lHso --sort=size /
-
-# Show detailed ownership info
-gdls -lO /
-
-# Explore a project folder
-gdls -lH /Projects/2024
-
-# See everything in Documents recursively
-gdls -R /Documents
-
-# Check recently modified files
-gdls -l --sort=date /
 ```
 
-## Additional Tools
+Clean up efficiently.
 
-This package also includes:
+## Architecture
 
-- **`find_large_files.py`** - Find and analyze large files taking up space
-- **`list_drive_files.py`** - Simple file lister
+Six focused classes. No parameter explosion. Clean errors. Full validation.
 
-Run them with:
-```bash
-uv run python find_large_files.py
-uv run python list_drive_files.py
 ```
-
-## File Type Indicators
-
-- 📁 **Blue text with /** - Folders
-- 📄 **Green text** - Google Docs/Sheets/Slides  
-- 📎 **White text** - Regular files
-- 🤝 **Yellow text with [shared]** - Files shared with you (don't count against your quota)
-
-## Troubleshooting
-
-### Authentication Issues
-
-If you see "Access blocked" error:
-1. Make sure you've added yourself as a test user in Google Cloud Console
-2. Go to APIs & Services → OAuth consent screen → Test users
-3. Add your email address
-
-### Performance
-
-- First run in each directory may be slower as it builds the cache
-- Subsequent runs use cached folder IDs for faster navigation
-- Use `--no-cache` if you see stale data
+core.py      # Data structures and constants
+auth.py      # Google Drive authentication  
+cache.py     # Path and folder size caching
+paths.py     # Unix path → Drive folder ID
+explorer.py  # File listing and calculations  
+display.py   # Formatting and output
+cli.py       # Command interface
+```
 
 ## Requirements
 
-- Python 3.8+
-- Google Drive API enabled
-- OAuth 2.0 credentials
+Python 3.8+. Google Drive API access.
 
-## License
-
-MIT
+That's it.
