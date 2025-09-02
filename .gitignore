@@ -27,6 +27,9 @@ token.pickle
 *.swo
 *~
 
+# Claude config
+CLAUDE.local.md
+
 # OS
 .DS_Store
 Thumbs.db
